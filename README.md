@@ -30,3 +30,49 @@ Pair-wise GSB 标注任务仓库（第 16 批 / 254）。
 1. 在本仓库中完成提示词要求的全部内容。
 2. `./mvnw -q verify` 必须通过。
 3. 完成后在所属分支（A 或 B）上提交，产物快照的父提交必须是初始环境快照。
+
+---
+
+## 组件说明
+
+包路径：`com.example.gsb.clock`（`src/main/java/com/example/gsb/clock`）。
+
+### 类一览
+
+| 类 | 职责 |
+|----|------|
+| `TimeSource` | 可注入的墙上时钟（`currentTimeMillis()`），提供 `TimeSource.system()` |
+| `Sleeper` | 可注入的等待原语，便于测试以空等待/推进假时钟替代真实 sleep |
+| `MonotonicClock` | 核心单调时间源：回拨检测、小幅自愈、大幅失败、恢复、统计 |
+| `ClockRollbackException` | 大幅回拨时立即抛出，携带当前偏移、阈值、恢复点、当前墙上时间 |
+| `SequenceGenerator` | 由单调时间派生 64 位严格递增、不重复序号（时间戳 + 12 位毫秒内序列） |
+| `ClockMode` / `ClockEvent` / `ClockStats` | 模式（NORMAL/COMPENSATING/FAILED）、事件记录、统计快照 |
+
+### 行为约定
+
+- **单调性**：`currentTimeMillis()` 返回的逻辑时间永不回退；同一毫秒可能重复（与 `System.currentTimeMillis()` 语义一致），但补偿期间严格递增、绝不产生重复时间戳。
+- **回拨检测**：幅度 `<= 阈值`（默认 100ms，构造可配，阈值边界算小幅）为小幅抖动，进入 `COMPENSATING`；幅度 `> 阈值` 为大幅回拨，立即进入 `FAILED` 并抛出带当前偏移的异常，时钟恢复到回拨前恢复点之前持续失败。
+- **小幅自愈**：等待墙上时间追上 `上次逻辑时间 + 1ms` 后返回；若等待为空操作则逻辑时间直接补偿前进，保证严格递增。
+- **恢复**：墙上时钟重新达到恢复点后平滑回到 `NORMAL`，逻辑时间保持不回退（必要时短暂持平），并记录恢复点（`lastRecoveryPoint()` / `RECOVERED` 事件）。
+- **序号**：`SequenceGenerator.nextId()` = `单调毫秒时间戳 << 12 | 毫秒内序列`（每毫秒 4096 个），同毫秒高频请求严格递增；超出预算时自旋等待逻辑时间推进；大幅回拨时异常向上传播，绝不发出错误序号。
+- **统计**：`stats()` 返回回拨总次数、小/大幅次数、最大回拨幅度、补偿等待总时长、序号生成总数与当前模式；`events()` 返回按检测顺序排列的事件。
+
+### 用法示例
+
+```java
+MonotonicClock clock = new MonotonicClock(TimeSource.system(), Sleeper.SYSTEM);
+SequenceGenerator orderIds = new SequenceGenerator(clock);
+
+long id = orderIds.nextId();          // 严格递增、不重复
+ClockStats stats = clock.stats();     // 回拨与补偿统计
+```
+
+测试中可注入 `TimeSource` 模拟回拨、注入 `Sleeper` 避免真实等待。
+
+### 测试
+
+```bash
+mvn -q verify
+```
+
+覆盖：单调非递减、小幅回拨自愈与无重复、大幅回拨立即失败与偏移信息、回拨中升级、恢复平滑与恢复点、阈值边界、序号同毫秒唯一递增、序号溢出跨毫秒、回拨期间序号不重复、统计聚合（共 18 个用例）。
