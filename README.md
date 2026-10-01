@@ -19,6 +19,27 @@ Pair-wise GSB 标注任务仓库（第 16 批 / 254）。
 ./mvnw -q verify
 ```
 
+## 组件说明
+
+实现位于 `com.example.gsb.clock` 包：
+
+- `MonotonicClock`：核心组件。在可注入的 `ClockSource`（墙上时钟）之上维护单调逻辑时钟，
+  保证 `now()` 永不倒退；`nextSequence()` 派生严格递增且不重复的 64 位序号
+  （高 52 位为单调毫秒时间，低 12 位为毫秒内计数器，每毫秒最多 4096 个）。
+- 回拨检测与分级：以"墙上时钟落后逻辑时间的当前偏移"与阈值比较，
+  小幅抖动（≤ 阈值）进入自愈，大幅回拨（> 阈值）立即抛出 `ClockBackwardsException`
+  （携带当前偏移、阈值、逻辑/墙上时钟读数），并在偏移降回阈值以内之前持续失败。
+- 小幅自愈：先在有界预算内通过可注入的 `Sleeper` 等待墙上时钟追平，
+  预算耗尽则逐毫秒补偿推进逻辑时间；自愈期间不会产生重复时间戳。
+- 恢复：墙上时钟重新追上逻辑时间后平滑回到正常模式，并记录 `RecoveryPoint`。
+- `ClockStatistics`：回拨次数、最大回拨幅度、补偿等待总时长、生成序号总数、恢复点列表。
+
+```java
+MonotonicClock clock = MonotonicClock.system(50, 100); // 阈值 50ms，单次最多等待 100ms
+long ts = clock.now();
+long orderId = clock.nextSequence();
+```
+
 ## 任务提示词
 
 以下为本题完整的 User Prompt 原文，两次执行必须使用完全相同的文本。
